@@ -1,1 +1,313 @@
-# Draw-and-Guess
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Classroom Draw - Live Lobby</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --primary: #5d5dff; --success: #2ecc71; --accent: #f1c40f;
+            --danger: #e74c3c; --bg: #f0f4f8; --panel: #ffffff;
+        }
+        * { box-sizing: border-box; font-family: 'Nunito', 'Segoe UI', sans-serif; -webkit-tap-highlight-color: transparent; }
+        body { margin: 0; background: var(--bg); height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+
+        /* Screens */
+        .screen { display: none; flex-direction: column; height: 100vh; width: 100vw; padding: 20px; align-items: center; overflow-y: auto; }
+        .active { display: flex; }
+
+        /* Blooket-style UI */
+        .card { background: var(--panel); padding: 25px; border-radius: 24px; box-shadow: 0 10px 20px rgba(0,0,0,0.1); text-align: center; max-width: 500px; width: 95%; border-bottom: 6px solid #ddd; }
+        .grid-players { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; width: 100%; margin-top: 20px; }
+        .player-tag { background: var(--primary); color: white; padding: 12px; border-radius: 12px; font-weight: bold; border-bottom: 4px solid #4848d1; animation: pop 0.3s ease; }
+        
+        /* Canvas & Game */
+        header { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 15px; background: white; box-shadow: 0 4px 0px rgba(0,0,0,0.05); z-index: 10; }
+        #canvas-container { position: relative; flex-grow: 1; display: flex; justify-content: center; align-items: center; padding: 15px; background: #ccd6dd; }
+        canvas { background: white; border-radius: 20px; box-shadow: 0 8px 0px rgba(0,0,0,0.1); touch-action: none; cursor: crosshair; }
+
+        /* Controls */
+        .toolbar { display: flex; gap: 15px; background: white; padding: 15px 25px; border-radius: 50px; position: absolute; bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.2); align-items: center; }
+        .color { width: 35px; height: 35px; border-radius: 50%; cursor: pointer; border: 3px solid #eee; transition: 0.2s; }
+        .color.selected { border-color: var(--primary); transform: translateY(-5px); }
+        
+        input[type="text"] { padding: 15px; border-radius: 15px; border: 2px solid #ddd; width: 100%; font-size: 1.2rem; outline: none; margin-bottom: 10px; }
+        button { padding: 15px 30px; border: none; border-radius: 15px; font-weight: 900; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: 0.1s; }
+        button:active { transform: translateY(4px); filter: brightness(0.9); }
+        .btn-green { background: var(--success); color: white; border-bottom: 4px solid #27ae60; }
+        .btn-blue { background: var(--primary); color: white; border-bottom: 4px solid #4848d1; }
+        
+        #qr-code { background: white; padding: 15px; border-radius: 15px; margin: 20px auto; border: 1px solid #ddd; }
+        #qr-code img { margin: 0 auto; }
+
+        @keyframes pop { 0% { transform: scale(0.6); } 100% { transform: scale(1); } }
+    </style>
+</head>
+<body>
+
+    <div id="screen-start" class="screen active">
+        <h1 style="color: var(--primary); font-size: 3.5rem; margin-bottom: 10px;">Draw & Guess</h1>
+        <div class="card">
+            <h3>Custom Words (Change these!)</h3>
+            <textarea id="custom-words" style="width:100%; height:100px; border-radius:15px; padding:12px; font-size: 1rem; border: 2px solid #eee; margin-bottom: 20px;">Apple, Banana, Teacher, Pizza, Rocket, Elephant, Snowman, Spider, Volcano, Mountain</textarea>
+            <button class="btn-blue" style="width:100%; font-size:1.5rem;" onclick="initTeacher()">Create Game Lobby</button>
+        </div>
+    </div>
+
+    <div id="screen-lobby" class="screen">
+        <h1 style="margin-bottom: 5px;">Scan to Join!</h1>
+        <div id="qr-code"></div>
+        <h2 id="player-count" style="color: var(--primary);">Waiting for players (0 / 25)</h2>
+        <div id="lobby-list" class="grid-players"></div>
+        <button class="btn-green" style="margin-top:40px; width: 250px; font-size: 1.4rem;" onclick="startRound()">Start Game</button>
+    </div>
+
+    <div id="screen-join" class="screen">
+        <div class="card" style="margin-top: 50px;">
+            <h2 style="color: var(--primary);">Join the Game</h2>
+            <input type="text" id="student-name" placeholder="Your Nickname" maxlength="12">
+            <button class="btn-green" style="width:100%;" onclick="joinAsStudent()">Enter Lobby</button>
+        </div>
+    </div>
+
+    <div id="screen-game" class="screen" style="padding:0; background: #ccd6dd;">
+        <header>
+            <div id="game-status" style="font-weight:900; font-size: 1.2rem; color: var(--primary)">Connecting...</div>
+            <div id="timer" style="font-size: 1.5rem; font-weight: 800; color: var(--danger)">60s</div>
+            <button class="btn-blue" id="next-btn" style="display:none; padding: 10px 20px;" onclick="startRound()">Next Word ➔</button>
+        </header>
+
+        <div id="canvas-container">
+            <canvas id="mainCanvas"></canvas>
+            
+            <div id="drawer-tools" class="toolbar" style="display:none;">
+                <div class="color selected" style="background:#000" onclick="setColor('#000', this)"></div>
+                <div class="color" style="background:#e74c3c" onclick="setColor('#e74c3c', this)"></div>
+                <div class="color" style="background:#3498db" onclick="setColor('#3498db', this)"></div>
+                <div class="color" style="background:#2ecc71" onclick="setColor('#2ecc71', this)"></div>
+                <div class="color" style="background:#f1c40f" onclick="setColor('#f1c40f', this)"></div>
+                <button class="btn-blue" style="background: #95a5a6; border-bottom-color: #7f8c8d; padding: 8px 15px;" onclick="clearCanvas()">Clear</button>
+            </div>
+
+            <div id="guesser-tools" class="toolbar" style="display:none; flex-direction:column; width: 80%; max-width: 400px; border-radius:20px;">
+                <input type="text" id="guess-input" placeholder="Type your guess here...">
+                <button class="btn-green" style="width: 100%" onclick="submitGuess()">Submit Guess</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let peer, conn, myRole, myName;
+        let connections = [];
+        let players = [];
+        let words = [];
+        let currentWord = "";
+        let timer;
+
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d');
+        let painting = false;
+        let color = "#000";
+
+        // --- HOST LOGIC ---
+        function initTeacher() {
+            words = document.getElementById('custom-words').value.split(',').map(w => w.trim());
+            myRole = 'teacher';
+            
+            peer = new Peer(); 
+            peer.on('open', id => {
+                showScreen('screen-lobby');
+                
+                // Fix for QR Scanning: Construct absolute URL manually
+                const currentUrl = window.location.href.split('?')[0]; 
+                const joinUrl = `${currentUrl}?host=${id}`;
+                
+                const qrArea = document.getElementById("qr-code");
+                qrArea.innerHTML = ""; // Clear
+                new QRCode(qrArea, {
+                    text: joinUrl,
+                    width: 200,
+                    height: 200,
+                    correctLevel: QRCode.CorrectLevel.H
+                });
+            });
+
+            peer.on('connection', c => {
+                c.on('open', () => {
+                    if(connections.length >= 25) return c.close();
+                    connections.push(c);
+                    c.on('data', data => handleData(data, c));
+                });
+            });
+            setupCanvas();
+        }
+
+        // --- STUDENT LOGIC ---
+        function joinAsStudent() {
+            const hostId = new URLSearchParams(window.location.search).get('host');
+            myName = document.getElementById('student-name').value.trim() || "Guest" + Math.floor(Math.random()*100);
+            
+            myRole = 'student';
+            peer = new Peer();
+            peer.on('open', () => {
+                conn = peer.connect(hostId);
+                conn.on('open', () => {
+                    conn.send({type: 'JOIN', name: myName});
+                    showScreen('screen-game');
+                    document.getElementById('game-status').innerText = "In Lobby - Waiting...";
+                });
+                conn.on('data', data => handleData(data));
+            });
+            setupCanvas();
+        }
+
+        // --- COMMUNICATION HUB ---
+        function handleData(data, senderConn) {
+            if (data.type === 'JOIN') {
+                players.push({id: senderConn.peer, name: data.name});
+                updateLobby();
+            }
+            if (data.type === 'GAME_START') {
+                showScreen('screen-game');
+                setupRound(data);
+            }
+            if (data.type === 'DRAW') {
+                drawAction(data);
+            }
+            if (data.type === 'CLEAR') {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+            if (data.type === 'GUESS') {
+                if (data.guess.toLowerCase() === currentWord.toLowerCase()) {
+                    broadcast({type: 'WINNER', name: data.name, word: currentWord});
+                }
+            }
+            if (data.type === 'WINNER') {
+                alert(`🎉 ${data.name} GOT IT! The word was: ${data.word}`);
+                if(myRole === 'teacher') document.getElementById('next-btn').style.display = 'block';
+                clearInterval(timer);
+            }
+        }
+
+        function broadcast(data) {
+            connections.forEach(c => c.send(data));
+            handleData(data); 
+        }
+
+        // --- GAMEPLAY ---
+        function updateLobby() {
+            document.getElementById('player-count').innerText = `Waiting for players (${players.length} / 25)`;
+            document.getElementById('lobby-list').innerHTML = players.map(p => `<div class="player-tag">${p.name}</div>`).join('');
+        }
+
+        function startRound() {
+            if (players.length === 0) return alert("You need students to join first!");
+            const drawer = players[Math.floor(Math.random() * players.length)];
+            currentWord = words[Math.floor(Math.random() * words.length)];
+            broadcast({type: 'GAME_START', drawerId: drawer.id, word: currentWord});
+        }
+
+        function setupRound(data) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('next-btn').style.display = 'none';
+            currentWord = data.word;
+            const isDrawer = (peer.id === data.drawerId);
+            
+            document.getElementById('drawer-tools').style.display = isDrawer ? 'flex' : 'none';
+            document.getElementById('guesser-tools').style.display = isDrawer ? 'none' : 'flex';
+            document.getElementById('game-status').innerText = isDrawer ? `DRAW THIS: ${data.word}` : "Guess the drawing!";
+            
+            let time = 60;
+            clearInterval(timer);
+            timer = setInterval(() => {
+                time--;
+                document.getElementById('timer').innerText = time + "s";
+                if(time <= 0) {
+                    clearInterval(timer);
+                    if(isDrawer) alert("Time is up!");
+                }
+            }, 1000);
+        }
+
+        function submitGuess() {
+            const input = document.getElementById('guess-input');
+            const val = input.value.trim();
+            if(!val) return;
+            conn.send({type: 'GUESS', guess: val, name: myName});
+            input.value = "";
+        }
+
+        // --- CANVAS ENGINE ---
+        function setupCanvas() {
+            const container = document.getElementById('canvas-container');
+            canvas.width = container.clientWidth - 30;
+            canvas.height = container.clientHeight - 100;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+        }
+
+        function startPaint(e) {
+            if (document.getElementById('drawer-tools').style.display === 'none') return;
+            painting = true;
+            paint(e);
+        }
+
+        function paint(e) {
+            if (!painting) return;
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+            const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+
+            const action = {type: 'DRAW', x, y, color};
+            drawAction(action);
+            
+            if(myRole === 'teacher') broadcast(action); 
+            else conn.send(action);
+        }
+
+        function drawAction(data) {
+            ctx.lineWidth = 6;
+            ctx.strokeStyle = data.color;
+            ctx.lineTo(data.x, data.y);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(data.x, data.y);
+        }
+
+        function stopPaint() { painting = false; ctx.beginPath(); }
+
+        function setColor(c, el) {
+            color = c;
+            document.querySelectorAll('.color').forEach(d => d.classList.remove('selected'));
+            el.classList.add('selected');
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const data = {type: 'CLEAR'};
+            if(myRole === 'teacher') broadcast(data); else conn.send(data);
+        }
+
+        canvas.addEventListener('mousedown', startPaint);
+        canvas.addEventListener('mousemove', paint);
+        window.addEventListener('mouseup', stopPaint);
+        canvas.addEventListener('touchstart', startPaint, {passive: false});
+        canvas.addEventListener('touchmove', paint, {passive: false});
+        window.addEventListener('touchend', stopPaint);
+
+        // --- ROUTING ---
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            if(id === 'screen-game') setTimeout(setupCanvas, 100);
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('host')) showScreen('screen-join');
+        window.addEventListener('resize', setupCanvas);
+    </script>
+</body>
+</html>
